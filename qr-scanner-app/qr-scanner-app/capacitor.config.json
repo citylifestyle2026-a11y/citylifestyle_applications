@@ -1,0 +1,6 @@
+{
+  "appId": "com.citylifestyle.qrscanner",
+  "appName": "City Lifestyle QR Scanner",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
