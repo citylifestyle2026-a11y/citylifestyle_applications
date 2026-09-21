@@ -33,10 +33,33 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       return true;
     } catch (err) {
-      const msg =
-        err.response?.data?.message ||
-        err.message ||
-        "Login failed. Please check your credentials.";
+      // Always prefer the backend's own message when the server responded
+      // (e.g. "Password is incorrect", "Login and password are required").
+      const serverMessage = err.response?.data?.message;
+
+      let msg;
+      if (serverMessage) {
+        msg = serverMessage;
+      } else if (err.response) {
+        // Server responded, but with no readable message - fall back to a
+        // status-specific explanation instead of Axios's generic text.
+        if (err.response.status === 404) {
+          msg =
+            "Login service not found (404). The app's API address may be misconfigured.";
+        } else if (err.response.status >= 500) {
+          msg = "Server error. Please try again in a moment.";
+        } else {
+          msg = `Login failed (error ${err.response.status}).`;
+        }
+      } else if (err.request) {
+        // Request was sent but no response ever came back - real network/
+        // connectivity/CORS failure, not a credentials problem.
+        msg =
+          "Could not reach the server. Check your internet connection and try again.";
+      } else {
+        msg = err.message || "Login failed. Please check your credentials.";
+      }
+
       setError(msg);
       return false;
     } finally {
