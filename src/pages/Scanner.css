@@ -160,3 +160,61 @@
   background: #fffaeb;
   color: #b54708;
 }
+
+/* ===== "Already scanned" popup (scanning is paused until OK) ===== */
+.scanAlreadyOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.scanAlreadyBox {
+  width: 100%;
+  max-width: 320px;
+  padding: 24px 20px 20px;
+  border-radius: 16px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.scanAlreadyIcon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: #fffaeb;
+  color: #f79009;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 52px;
+}
+
+.scanAlreadyTitle {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #b54708;
+}
+
+.scanAlreadyText {
+  margin: 0 0 18px;
+  font-size: 14px;
+  color: #475467;
+}
+
+.scanAlreadyOk {
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #f79009;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}

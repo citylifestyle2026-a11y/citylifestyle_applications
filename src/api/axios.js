@@ -30,7 +30,14 @@ api.interceptors.response.use(
   (error) => {
     const isLoginRequest = error.config?.url?.includes("/auth/login");
 
-    if (error.response?.status === 401 && !isLoginRequest) {
+    // The backend also answers 401 for a WRONG / invalid QR code
+    // ("Invalid or expired QR code."). That is not an expired login, so
+    // do not log the staff member out - the scanner shows it as a wrong QR.
+    const isQrCodeError =
+      error.config?.url?.includes("/qr/") &&
+      /qr/i.test(String(error.response?.data?.message || ""));
+
+    if (error.response?.status === 401 && !isLoginRequest && !isQrCodeError) {
       // Session expired / invalid token -> force back to login.
       localStorage.removeItem("token");
       localStorage.removeItem("user");
