@@ -10,19 +10,6 @@ const SCANNER_ELEMENT_ID = "qr-reader-region";
 // camera automatically resumes scanning (RED) again, ready for the next QR.
 const RESET_DELAY_MS = 2200;
 
-// The SAME QR scanned again within this window is answered with
-// "Already scanned" straight away (no server call), and scanning stays
-// paused until the staff member taps OK.
-const DUPLICATE_WINDOW_MS = 60 * 1000;
-
-// Two sounds (see public/sounds/README.txt):
-//   sounds/scan-success.mp3 -> correct QR
-//   sounds/wrong-qr.mp3     -> wrong / invalid QR
-// Neither is played for "Already scanned" (that only shows the popup).
-// If a file is missing or cannot play, a simple beep is used instead.
-const SUCCESS_SOUND_URL = `${import.meta.env.BASE_URL}sounds/scan-success.mp3`;
-const WRONG_SOUND_URL = `${import.meta.env.BASE_URL}sounds/wrong-qr.mp3`;
-
 const playBeep = (frequency) => {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -45,30 +32,12 @@ const playBeep = (frequency) => {
   }
 };
 
-const audioCache = new Map();
-const playSound = (url, fallbackFrequency) => {
-  try {
-    let audio = audioCache.get(url);
-    if (!audio) {
-      audio = new Audio(url);
-      audio.preload = "auto";
-      audioCache.set(url, audio);
-    }
-    audio.currentTime = 0;
-    const result = audio.play();
-    if (result && typeof result.catch === "function") {
-      result.catch(() => playBeep(fallbackFrequency));
-    }
-  } catch {
-    playBeep(fallbackFrequency);
-  }
-};
-
 const Scanner = () => {
   const { logout } = useAuth();
 
-  // "scanning" (red) -> "success" (green) -> back to "scanning"
-  // "error" is shown briefly in red as well, with a message, then resumes.
+  // "scanning" (red) -> "checking" (blue) -> "success" (green) / "warning"
+  // (amber) / "error" (red) -> back to "scanning". Green only after the
+  // server has allowed the entry.
   const [status, setStatus] = useState("scanning");
   const [message, setMessage] = useState("Point the camera at a QR code");
 
@@ -76,11 +45,6 @@ const Scanner = () => {
   const isMountedRef = useRef(true);
   const hasScannedRef = useRef(false);
   const resetTimeoutRef = useRef(null);
-  // qr text -> { at: timestamp of last scan, name }
-  const recentScansRef = useRef(new Map());
-  // "Already scanned" popup. While it is open the camera ignores every QR;
-  // only the OK button lets the next scan through.
-  const [alreadyPopup, setAlreadyPopup] = useState(null); // { name } | null
 
   const resumeScanning = useCallback(() => {
     hasScannedRef.current = false;
@@ -89,77 +53,55 @@ const Scanner = () => {
     setMessage("Point the camera at a QR code");
   }, []);
 
-  const showAlreadyScanned = useCallback((name) => {
-    clearTimeout(resetTimeoutRef.current);
-    setStatus("warning");
-    setMessage("Already scanned");
-    setAlreadyPopup({ name: name || "" });
-    // hasScannedRef stays true -> no QR is processed until OK is tapped.
-  }, []);
-
-  const handleAlreadyOk = useCallback(() => {
-    setAlreadyPopup(null);
-    resumeScanning();
-  }, [resumeScanning]);
-
   const handleDecodedText = useCallback(
     async (decodedText) => {
       if (hasScannedRef.current) return;
       hasScannedRef.current = true;
 
-      const token = decodedText.trim();
-      const now = Date.now();
+      // 1) QR was READ. It is NOT accepted yet, so the frame is neutral
+      // (blue "Checking...") until the server confirms the ticket. Green is
+      // shown only after a real "entry allowed" answer, so staff never see
+      // green for a ticket that is invalid / already used / cancelled.
+      setStatus("checking");
+      setMessage("Checking ticket...");
 
-      // Forget scans older than the window.
-      for (const [key, info] of recentScansRef.current) {
-        if (now - info.at > DUPLICATE_WINDOW_MS) recentScansRef.current.delete(key);
-      }
-
-      // Same QR again within 1 minute -> "Already scanned" + OK, no API call.
-      const previous = recentScansRef.current.get(token);
-      if (previous) {
-        showAlreadyScanned(previous.name);
-        return;
-      }
-
-      // 1) QR successfully READ -> flip frame to GREEN immediately.
-      setStatus("success");
-      setMessage("QR Scanned Successfully!");
-
-      // 2) In the background, confirm the ticket with the backend so
-      // entry is actually recorded (not just "a QR was read").
       try {
-        const res = await checkInQrApi(token);
-        const name = res?.data?.attendee?.name;
-        recentScansRef.current.set(token, { at: Date.now(), name: name || "" });
-        playSound(SUCCESS_SOUND_URL, 880); // correct QR
+        const res = await checkInQrApi(decodedText.trim());
+        const data = res?.data || {};
+        const name = data.attendee?.name;
+        const guests = Number(data.guests) || 1;
+
+        // Group QR (one scan admits the whole booking): show how many.
+        const guestText = data.isGroupEntry && guests > 1 ? ` (${guests} guests)` : "";
+
+        playBeep(880);
+        setStatus("success");
         setMessage(
           name
-            ? `QR Scanned Successfully! Entry allowed - ${name}`
-            : "QR Scanned Successfully! Entry allowed."
+            ? `Entry allowed - ${name}${guestText}`
+            : `Entry allowed${guestText}`
         );
       } catch (err) {
         const serverMsg = err.response?.data?.message;
         const isAlreadyUsed =
-          typeof serverMsg === "string" && /already/i.test(serverMsg);
+          typeof serverMsg === "string" && /already.*(used|checked)/i.test(serverMsg);
 
-        if (isAlreadyUsed) {
-          // Already checked in earlier (e.g. more than a minute ago, or on
-          // another device): same "Already scanned" popup with OK.
-          recentScansRef.current.set(token, { at: Date.now(), name: "" });
-          showAlreadyScanned("");
-          return;
-        }
-
-        // Wrong / invalid QR: red frame + alert sound, then scanning resumes.
-        setStatus("error");
-        setMessage(serverMsg || "This ticket could not be checked in.");
-        playSound(WRONG_SOUND_URL, 220); // wrong / invalid QR
+        // "Already checked in" is not really an error - it's expected
+        // when a ticket is scanned twice. Show it as amber/warning, not
+        // red, so staff can tell it apart from a genuinely invalid QR.
+        setStatus(isAlreadyUsed ? "warning" : "error");
+        setMessage(
+          serverMsg ||
+            (err.response
+              ? "This ticket could not be checked in."
+              : "No connection to the server. Check internet and scan again.")
+        );
+        playBeep(isAlreadyUsed ? 440 : 220);
       }
 
       resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
     },
-    [resumeScanning, showAlreadyScanned]
+    [resumeScanning]
   );
 
   useEffect(() => {
@@ -210,6 +152,8 @@ const Scanner = () => {
   const frameClass =
     status === "success"
       ? "scanFrame scanFrame--green"
+      : status === "checking"
+      ? "scanFrame scanFrame--blue scanFrame--pulse"
       : status === "warning"
       ? "scanFrame scanFrame--amber scanFrame--pulse"
       : status === "error"
@@ -239,6 +183,8 @@ const Scanner = () => {
         className={
           status === "success"
             ? "scannerMessage scannerMessage--green"
+            : status === "checking"
+            ? "scannerMessage scannerMessage--blue"
             : status === "warning"
             ? "scannerMessage scannerMessage--amber"
             : status === "error"
@@ -248,28 +194,6 @@ const Scanner = () => {
       >
         {message}
       </div>
-
-      {alreadyPopup && (
-        <div className="scanAlreadyOverlay" role="alertdialog" aria-modal="true">
-          <div className="scanAlreadyBox">
-            <div className="scanAlreadyIcon">!</div>
-            <h2 className="scanAlreadyTitle">Already scanned</h2>
-            <p className="scanAlreadyText">
-              {alreadyPopup.name
-                ? `${alreadyPopup.name}'s ticket was already scanned.`
-                : "This QR code was already scanned."}
-            </p>
-            <button
-              type="button"
-              className="scanAlreadyOk"
-              onClick={handleAlreadyOk}
-              autoFocus
-            >
-              OK
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
