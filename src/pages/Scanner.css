@@ -218,3 +218,18 @@
   font-weight: 700;
   cursor: pointer;
 }
+
+
+/* Red variant of the popup (cancelled / invalid ticket). */
+.scanAlreadyBox--error .scanAlreadyIcon {
+  background: #fef3f2;
+  color: #d92d20;
+}
+
+.scanAlreadyBox--error .scanAlreadyTitle {
+  color: #b42318;
+}
+
+.scanAlreadyBox--error .scanAlreadyOk {
+  background: #d92d20;
+}

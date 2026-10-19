@@ -40,6 +40,9 @@ const Scanner = () => {
   // server has allowed the entry.
   const [status, setStatus] = useState("scanning");
   const [message, setMessage] = useState("Point the camera at a QR code");
+  // Popup for a ticket that was NOT allowed in (cancelled / already used /
+  // invalid / no connection). Scanning stays paused until staff press OK.
+  const [popup, setPopup] = useState(null);
 
   const scannerRef = useRef(null);
   const isMountedRef = useRef(true);
@@ -97,6 +100,27 @@ const Scanner = () => {
               : "No connection to the server. Check internet and scan again.")
         );
         playBeep(isAlreadyUsed ? 440 : 220);
+
+        const text =
+          serverMsg ||
+          (err.response
+            ? "This ticket could not be checked in."
+            : "No connection to the server. Check internet and scan again.");
+        const isCancelled = /cancel/i.test(String(serverMsg || ""));
+
+        setPopup({
+          tone: isAlreadyUsed ? "warning" : "error",
+          title: isAlreadyUsed
+            ? "Already Scanned"
+            : isCancelled
+            ? "Ticket Cancelled"
+            : err.response
+            ? "Entry Not Allowed"
+            : "No Connection",
+          text,
+        });
+        // Do NOT auto-resume: the popup's OK button resumes scanning.
+        return;
       }
 
       resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
@@ -149,6 +173,11 @@ const Scanner = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const closePopup = () => {
+    setPopup(null);
+    resumeScanning();
+  };
+
   const frameClass =
     status === "success"
       ? "scanFrame scanFrame--green"
@@ -194,6 +223,19 @@ const Scanner = () => {
       >
         {message}
       </div>
+
+      {popup && (
+        <div className="scanAlreadyOverlay" role="alertdialog" aria-modal="true">
+          <div className={`scanAlreadyBox scanAlreadyBox--${popup.tone}`}>
+            <div className="scanAlreadyIcon">{popup.tone === "warning" ? "!" : "\u2715"}</div>
+            <h3 className="scanAlreadyTitle">{popup.title}</h3>
+            <p className="scanAlreadyText">{popup.text}</p>
+            <button type="button" className="scanAlreadyOk" onClick={closePopup}>
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
