@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { forgotPasswordApi, resetPasswordWithOtpApi } from "../services/authService";
-import logo from "../assets/city-lifestyle-logo.jpg";
+import logo from "../assets/parv-logo.png";
 import "./Login.css";
 
 // Simple inline icons (no external icon library needed, keeps the APK small).
@@ -182,8 +182,8 @@ const Login = () => {
     <div className="ctLogin__page">
       <div className="ctLogin__card">
         <div className="ctLogin__brand">
-          <img src={logo} alt="City Toppers" className="ctLogin__logo" />
-          <h1 className="ctLogin__title">City Toppers</h1>
+          <img src={logo} alt="Parv 6.0" className="ctLogin__logo" />
+          <h1 className="ctLogin__title">Parv QR Scanner</h1>
           <p className="ctLogin__subtitle">
             {view === "login" && "Sign in to start scanning tickets"}
             {view === "forgot-email" && "Reset your password"}

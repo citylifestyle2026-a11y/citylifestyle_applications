@@ -11,8 +11,23 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  background: #101828;
-  color: #ffffff;
+  background: #8b0609;
+  color: #fdff9a;
+}
+
+.scannerHeaderBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scannerHeaderLogo {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .scannerHeaderTitle {
@@ -22,8 +37,8 @@
 
 .scannerLogoutBtn {
   background: transparent;
-  border: 1px solid #475467;
-  color: #d0d5dd;
+  border: 1px solid rgba(253, 255, 154, 0.6);
+  color: #fdff9a;
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 13px;
@@ -142,8 +157,8 @@
 }
 
 .scannerMessage--neutral {
-  background: #101828;
-  color: #d0d5dd;
+  background: #5e0406;
+  color: #fdff9a;
 }
 
 .scannerMessage--green {

@@ -3,6 +3,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import { useAuth } from "../context/AuthContext";
 import { checkInQrApi } from "../services/qrService";
 import "./Scanner.css";
+import parvLogo from "../assets/parv-logo.png";
 
 const SCANNER_ELEMENT_ID = "qr-reader-region";
 
@@ -192,7 +193,10 @@ const Scanner = () => {
   return (
     <div className="scannerScreen">
       <div className="scannerHeader">
-        <span className="scannerHeaderTitle">Scan Ticket QR</span>
+        <span className="scannerHeaderBrand">
+          <img src={parvLogo} alt="Parv 6.0" className="scannerHeaderLogo" />
+          <span className="scannerHeaderTitle">Scan Ticket QR</span>
+        </span>
         <button className="scannerLogoutBtn" onClick={logout}>
           Logout
         </button>

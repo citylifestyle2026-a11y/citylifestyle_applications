@@ -6,8 +6,8 @@
   --ct-border-strong: rgba(255, 255, 255, 0.18);
   --ct-text-muted: rgba(255, 255, 255, 0.6);
   --ct-text-faint: rgba(255, 255, 255, 0.45);
-  --ct-accent: #4a90c2;
-  --ct-accent-gradient: linear-gradient(135deg, #2f6f9e, #0b2a44);
+  --ct-accent: #FDFF9A;
+  --ct-accent-gradient: linear-gradient(135deg, #a40a0f, #8b0609 55%, #5e0406);
   --ct-error: #ff6b6b;
 }
 
@@ -43,12 +43,12 @@
 
 .ctLogin__logo {
   display: block;
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
+  width: 132px;
+  height: 132px;
+  border-radius: 26px;
   object-fit: cover;
-  margin: 0 auto 16px;
-  box-shadow: 0 0 0 3px rgba(74, 144, 194, 0.28), 0 8px 24px rgba(0, 0, 0, 0.5);
+  margin: 0 auto 18px;
+  box-shadow: 0 0 0 2px rgba(240, 220, 150, 0.35), 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .ctLogin__title {
@@ -171,8 +171,9 @@
   border: none;
   font-size: 15px;
   font-weight: 600;
-  color: #ffffff;
+  color: #FDFF9A;
   background: var(--ct-accent-gradient);
+  box-shadow: 0 0 0 1px rgba(253, 255, 154, 0.35) inset;
   cursor: pointer;
   margin-top: 8px;
   transition: opacity 0.2s ease;
