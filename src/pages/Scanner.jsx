@@ -33,6 +33,35 @@ const playBeep = (frequency) => {
   }
 };
 
+// Animated icons: the tick / cross / "!" draw themselves on screen so staff
+// can tell the result at a glance, even from a distance.
+const StatusIcon = ({ type }) => (
+  <svg
+    className={`statusIcon statusIcon--${type}`}
+    viewBox="0 0 52 52"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {type === "tick" && <path pathLength="1" d="M13 27 L22 36 L40 16" />}
+    {type === "cross" && (
+      <>
+        <path pathLength="1" d="M15 15 L37 37" />
+        <path pathLength="1" d="M37 15 L15 37" />
+      </>
+    )}
+    {type === "warn" && (
+      <>
+        <path pathLength="1" d="M26 12 L26 29" />
+        <path d="M26 39 L26 39.5" />
+      </>
+    )}
+  </svg>
+);
+
 const Scanner = () => {
   const { logout } = useAuth();
 
@@ -210,6 +239,13 @@ const Scanner = () => {
           <span className="scanFrame__corner scanFrame__corner--bl" />
           <span className="scanFrame__corner scanFrame__corner--br" />
         </div>
+
+        {/* Big green TICK on a correct scan (entry allowed). */}
+        {status === "success" && (
+          <div className="scanResult scanResult--success" aria-hidden="true">
+            <StatusIcon type="tick" />
+          </div>
+        )}
       </div>
 
       <div
@@ -231,7 +267,9 @@ const Scanner = () => {
       {popup && (
         <div className="scanAlreadyOverlay" role="alertdialog" aria-modal="true">
           <div className={`scanAlreadyBox scanAlreadyBox--${popup.tone}`}>
-            <div className="scanAlreadyIcon">{popup.tone === "warning" ? "!" : "\u2715"}</div>
+            <div className="scanAlreadyIcon">
+              <StatusIcon type={popup.tone === "warning" ? "warn" : "cross"} />
+            </div>
             <h3 className="scanAlreadyTitle">{popup.title}</h3>
             <p className="scanAlreadyText">{popup.text}</p>
             <button type="button" className="scanAlreadyOk" onClick={closePopup}>
