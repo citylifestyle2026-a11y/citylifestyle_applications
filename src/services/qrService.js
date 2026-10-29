@@ -6,7 +6,14 @@ export const verifyQrApi = async (qrToken) => {
   return response.data;
 };
 
-export const checkInQrApi = async (qrToken) => {
-  const response = await api.post("/qr/check-in", { qrToken });
+// `guests` is optional: for a pass with 2+ guests left the server first answers
+// { needsGuestCount: true, remaining, ... } and the scanner calls this again
+// with the number of people who are entering now.
+export const checkInQrApi = async (qrToken, guests) => {
+  const response = await api.post("/qr/check-in", {
+    qrToken,
+    askGuests: true,
+    ...(guests ? { guests } : {}),
+  });
   return response.data;
 };

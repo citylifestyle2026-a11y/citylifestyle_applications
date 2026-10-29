@@ -73,6 +73,10 @@ const Scanner = () => {
   // Popup for a ticket that was NOT allowed in (cancelled / already used /
   // invalid / no connection). Scanning stays paused until staff press OK.
   const [popup, setPopup] = useState(null);
+  // "How many guests are entering?" - shown for a pass with 2+ guests left.
+  // { qrToken, remaining, alreadyEntered, totalGuests, name }
+  const [guestPicker, setGuestPicker] = useState(null);
+  const [pickedGuests, setPickedGuests] = useState(1);
 
   const scannerRef = useRef(null);
   const isMountedRef = useRef(true);
@@ -85,6 +89,27 @@ const Scanner = () => {
     setStatus("scanning");
     setMessage("Point the camera at a QR code");
   }, []);
+
+  // Green result after the server allowed the entry.
+  const showEntryAllowed = useCallback((data) => {
+    const name = data.attendee?.name || data.booking?.name;
+    const guests = Number(data.guests) || 1;
+    const remaining = Number(data.remaining) || 0;
+
+    // Group QR: show how many entered now, and how many can still come later.
+    const guestText = data.isGroupEntry
+      ? ` (${guests} guest${guests === 1 ? "" : "s"})`
+      : "";
+    const leftText =
+      data.isGroupEntry && remaining > 0 ? ` - ${remaining} more can enter later` : "";
+
+    playBeep(880);
+    setStatus("success");
+    setMessage(
+      `Entry allowed${name ? ` - ${name}` : ""}${guestText}${leftText}`
+    );
+    resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
+  }, [resumeScanning]);
 
   const handleDecodedText = useCallback(
     async (decodedText) => {
@@ -99,21 +124,28 @@ const Scanner = () => {
       setMessage("Checking ticket...");
 
       try {
-        const res = await checkInQrApi(decodedText.trim());
+        const qrToken = decodedText.trim();
+        const res = await checkInQrApi(qrToken);
         const data = res?.data || {};
-        const name = data.attendee?.name;
-        const guests = Number(data.guests) || 1;
 
-        // Group QR (one scan admits the whole booking): show how many.
-        const guestText = data.isGroupEntry && guests > 1 ? ` (${guests} guests)` : "";
+        // Pass with 2+ guests still to enter: nothing is checked in yet.
+        // Ask the staff how many people are entering now (scanning stays
+        // paused until they confirm or cancel).
+        if (data.needsGuestCount) {
+          setPickedGuests(data.remaining);
+          setGuestPicker({
+            qrToken,
+            remaining: data.remaining,
+            alreadyEntered: data.alreadyEntered || 0,
+            totalGuests: data.totalGuests || data.remaining,
+            name: data.booking?.name || data.attendee?.name || "",
+          });
+          setStatus("warning");
+          setMessage("Select how many guests are entering");
+          return;
+        }
 
-        playBeep(880);
-        setStatus("success");
-        setMessage(
-          name
-            ? `Entry allowed - ${name}${guestText}`
-            : `Entry allowed${guestText}`
-        );
+        showEntryAllowed(data);
       } catch (err) {
         const serverMsg = err.response?.data?.message;
         const isAlreadyUsed =
@@ -150,13 +182,46 @@ const Scanner = () => {
           text,
         });
         // Do NOT auto-resume: the popup's OK button resumes scanning.
-        return;
       }
-
-      resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
     },
-    [resumeScanning]
+    [resumeScanning, showEntryAllowed]
   );
+
+  // Staff confirmed the number of guests entering now.
+  const confirmGuests = async () => {
+    if (!guestPicker) return;
+    const { qrToken } = guestPicker;
+    setGuestPicker(null);
+    setStatus("checking");
+    setMessage("Checking ticket...");
+
+    try {
+      const res = await checkInQrApi(qrToken, pickedGuests);
+      showEntryAllowed(res?.data || {});
+    } catch (err) {
+      const serverMsg = err.response?.data?.message;
+      const text =
+        serverMsg ||
+        (err.response
+          ? "This ticket could not be checked in."
+          : "No connection to the server. Check internet and scan again.");
+      const isAlreadyUsed = /already.*(used|checked)/i.test(String(serverMsg || ""));
+      setStatus(isAlreadyUsed ? "warning" : "error");
+      setMessage(text);
+      playBeep(isAlreadyUsed ? 440 : 220);
+      setPopup({
+        tone: isAlreadyUsed ? "warning" : "error",
+        title: isAlreadyUsed ? "Already Scanned" : err.response ? "Entry Not Allowed" : "No Connection",
+        text,
+      });
+    }
+  };
+
+  // Cancel: nobody is checked in, the pass stays fully valid for next time.
+  const cancelGuests = () => {
+    setGuestPicker(null);
+    resumeScanning();
+  };
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -224,7 +289,7 @@ const Scanner = () => {
       <div className="scannerHeader">
         <span className="scannerHeaderBrand">
           <img src={parvLogo} alt="Parv 6.0" className="scannerHeaderLogo" />
-          <span className="scannerHeaderTitle">Scan Ticket QR</span>
+          <span className="scannerHeaderTitle">Scan Ticket QR <small style={{ opacity: 0.7, fontWeight: 400 }}>v2</small></span>
         </span>
         <button className="scannerLogoutBtn" onClick={logout}>
           Logout
@@ -263,6 +328,55 @@ const Scanner = () => {
       >
         {message}
       </div>
+
+      {guestPicker && (
+        <div className="scanAlreadyOverlay" role="dialog" aria-modal="true">
+          <div className="scanAlreadyBox guestPick">
+            <h3 className="guestPick__title">How many guests are entering?</h3>
+            {guestPicker.name && <p className="guestPick__name">{guestPicker.name}</p>}
+            <p className="guestPick__info">
+              Pass for {guestPicker.totalGuests} &middot;{" "}
+              {guestPicker.alreadyEntered > 0
+                ? `${guestPicker.alreadyEntered} already entered, `
+                : ""}
+              {guestPicker.remaining} left
+            </p>
+
+            <div className="guestPick__stepper">
+              <button
+                type="button"
+                onClick={() => setPickedGuests((n) => Math.max(1, n - 1))}
+                disabled={pickedGuests <= 1}
+                aria-label="Fewer guests"
+              >
+                &minus;
+              </button>
+              <b>{pickedGuests}</b>
+              <button
+                type="button"
+                onClick={() => setPickedGuests((n) => Math.min(guestPicker.remaining, n + 1))}
+                disabled={pickedGuests >= guestPicker.remaining}
+                aria-label="More guests"
+              >
+                +
+              </button>
+            </div>
+
+            {guestPicker.remaining - pickedGuests > 0 && (
+              <p className="guestPick__later">
+                {guestPicker.remaining - pickedGuests} can scan this QR again later.
+              </p>
+            )}
+
+            <button type="button" className="guestPick__ok" onClick={confirmGuests}>
+              Allow {pickedGuests} {pickedGuests === 1 ? "guest" : "guests"}
+            </button>
+            <button type="button" className="guestPick__cancel" onClick={cancelGuests}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {popup && (
         <div className="scanAlreadyOverlay" role="alertdialog" aria-modal="true">

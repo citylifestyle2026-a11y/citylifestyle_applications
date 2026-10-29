@@ -327,3 +327,24 @@
   25% { transform: translateX(-7px); }
   75% { transform: translateX(7px); }
 }
+
+/* ===== "How many guests are entering?" picker ===== */
+.guestPick__title { margin: 0 0 4px; font-size: 19px; font-weight: 700; color: #101828; }
+.guestPick__name { margin: 0; font-size: 15px; font-weight: 600; color: #8b0609; }
+.guestPick__info { margin: 6px 0 14px; font-size: 13px; color: #475467; }
+.guestPick__stepper { display: flex; align-items: center; justify-content: center; gap: 22px; margin-bottom: 10px; }
+.guestPick__stepper b { min-width: 48px; font-size: 40px; font-weight: 700; color: #101828; }
+.guestPick__stepper button {
+  width: 52px; height: 52px; border-radius: 50%; border: 0;
+  background: #8b0609; color: #fff; font-size: 28px; line-height: 1; cursor: pointer;
+}
+.guestPick__stepper button:disabled { background: #d0d5dd; cursor: not-allowed; }
+.guestPick__later { margin: 0 0 12px; font-size: 13px; color: #b54708; }
+.guestPick__ok {
+  width: 100%; padding: 13px; border: 0; border-radius: 10px; margin-top: 4px;
+  background: #12b76a; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer;
+}
+.guestPick__cancel {
+  width: 100%; padding: 11px; margin-top: 8px; border: 1px solid #d0d5dd;
+  border-radius: 10px; background: #fff; color: #475467; font-size: 15px; cursor: pointer;
+}
