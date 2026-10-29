@@ -17,3 +17,13 @@ export const checkInQrApi = async (qrToken, guests) => {
   });
   return response.data;
 };
+
+// Staff allowed the wrong number of guests: put the last entry back so the
+// same QR can be scanned again with the correct count.
+export const undoCheckInQrApi = async (qrToken, guests) => {
+  const response = await api.post("/qr/undo-check-in", {
+    qrToken,
+    ...(guests ? { guests } : {}),
+  });
+  return response.data;
+};

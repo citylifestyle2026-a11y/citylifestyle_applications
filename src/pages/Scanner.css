@@ -348,3 +348,13 @@
   width: 100%; padding: 11px; margin-top: 8px; border: 1px solid #d0d5dd;
   border-radius: 10px; background: #fff; color: #475467; font-size: 15px; cursor: pointer;
 }
+
+/* ===== Edit-count bar (shown after a successful entry) ===== */
+.editEntryBar { display: flex; gap: 10px; padding: 12px 16px; }
+.editEntryBar button {
+  flex: 1; padding: 13px; border-radius: 10px; font-size: 15px;
+  font-weight: 700; cursor: pointer;
+}
+.editEntryBar__edit { border: 0; background: #f79009; color: #fff; }
+.editEntryBar__edit:disabled { opacity: 0.6; cursor: not-allowed; }
+.editEntryBar__next { border: 1px solid #d0d5dd; background: #fff; color: #344054; }

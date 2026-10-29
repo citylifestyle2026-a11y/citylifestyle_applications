@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { useAuth } from "../context/AuthContext";
-import { checkInQrApi } from "../services/qrService";
+import { checkInQrApi, undoCheckInQrApi } from "../services/qrService";
 import "./Scanner.css";
 import parvLogo from "../assets/parv-logo.png";
 
@@ -10,6 +10,9 @@ const SCANNER_ELEMENT_ID = "qr-reader-region";
 // How long the GREEN success frame + message stays on screen before the
 // camera automatically resumes scanning (RED) again, ready for the next QR.
 const RESET_DELAY_MS = 2200;
+// After a successful entry the "Edit count" button stays available this long
+// before the camera resumes automatically (staff can also tap "Next scan").
+const EDIT_WINDOW_MS = 7000;
 
 const playBeep = (frequency) => {
   try {
@@ -77,6 +80,10 @@ const Scanner = () => {
   // { qrToken, remaining, alreadyEntered, totalGuests, name }
   const [guestPicker, setGuestPicker] = useState(null);
   const [pickedGuests, setPickedGuests] = useState(1);
+  // Last successful entry, kept briefly so staff can fix a wrong count.
+  // { qrToken, guests }
+  const [lastEntry, setLastEntry] = useState(null);
+  const [undoing, setUndoing] = useState(false);
 
   const scannerRef = useRef(null);
   const isMountedRef = useRef(true);
@@ -86,12 +93,14 @@ const Scanner = () => {
   const resumeScanning = useCallback(() => {
     hasScannedRef.current = false;
     if (!isMountedRef.current) return;
+    clearTimeout(resetTimeoutRef.current);
+    setLastEntry(null);
     setStatus("scanning");
     setMessage("Point the camera at a QR code");
   }, []);
 
   // Green result after the server allowed the entry.
-  const showEntryAllowed = useCallback((data) => {
+  const showEntryAllowed = useCallback((data, qrToken) => {
     const name = data.attendee?.name || data.booking?.name;
     const guests = Number(data.guests) || 1;
     const remaining = Number(data.remaining) || 0;
@@ -108,7 +117,10 @@ const Scanner = () => {
     setMessage(
       `Entry allowed${name ? ` - ${name}` : ""}${guestText}${leftText}`
     );
-    resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
+    // Keep the result on screen a bit longer, with an "Edit count" button.
+    setLastEntry({ qrToken, guests });
+    clearTimeout(resetTimeoutRef.current);
+    resetTimeoutRef.current = setTimeout(resumeScanning, EDIT_WINDOW_MS);
   }, [resumeScanning]);
 
   const handleDecodedText = useCallback(
@@ -145,7 +157,7 @@ const Scanner = () => {
           return;
         }
 
-        showEntryAllowed(data);
+        showEntryAllowed(data, qrToken);
       } catch (err) {
         const serverMsg = err.response?.data?.message;
         const isAlreadyUsed =
@@ -197,7 +209,7 @@ const Scanner = () => {
 
     try {
       const res = await checkInQrApi(qrToken, pickedGuests);
-      showEntryAllowed(res?.data || {});
+      showEntryAllowed(res?.data || {}, qrToken);
     } catch (err) {
       const serverMsg = err.response?.data?.message;
       const text =
@@ -214,6 +226,52 @@ const Scanner = () => {
         title: isAlreadyUsed ? "Already Scanned" : err.response ? "Entry Not Allowed" : "No Connection",
         text,
       });
+    }
+  };
+
+  // "Wrong count? Edit": revert the entry that was just allowed, then ask
+  // again how many guests are really entering.
+  const editLastEntry = async () => {
+    if (!lastEntry || undoing) return;
+    clearTimeout(resetTimeoutRef.current);
+    setUndoing(true);
+    setMessage("Reverting entry...");
+    try {
+      const res = await undoCheckInQrApi(lastEntry.qrToken, lastEntry.guests);
+      const d = res?.data || {};
+      const { qrToken } = lastEntry;
+      setLastEntry(null);
+
+      if (d.isGroupEntry && d.remaining >= 1) {
+        // Ask the staff for the correct number (default 1).
+        setPickedGuests(1);
+        setGuestPicker({
+          qrToken,
+          remaining: d.remaining,
+          alreadyEntered: d.alreadyEntered || 0,
+          totalGuests: d.totalGuests || d.remaining,
+          name: "",
+        });
+        setStatus("warning");
+        setMessage("Entry reverted - select the correct number of guests");
+      } else {
+        setStatus("warning");
+        setMessage("Entry reverted. Scan the QR again.");
+        resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
+      }
+    } catch (err) {
+      const text =
+        err.response?.data?.message ||
+        (err.response
+          ? "Could not undo this entry."
+          : "No connection to the server. Check internet and try again.");
+      setLastEntry(null);
+      setStatus("error");
+      setMessage(text);
+      playBeep(220);
+      setPopup({ tone: "error", title: "Could Not Edit", text });
+    } finally {
+      setUndoing(false);
     }
   };
 
@@ -328,6 +386,26 @@ const Scanner = () => {
       >
         {message}
       </div>
+
+      {status === "success" && lastEntry && (
+        <div className="editEntryBar">
+          <button
+            type="button"
+            className="editEntryBar__edit"
+            onClick={editLastEntry}
+            disabled={undoing}
+          >
+            Wrong count? Edit
+          </button>
+          <button
+            type="button"
+            className="editEntryBar__next"
+            onClick={resumeScanning}
+          >
+            Next scan
+          </button>
+        </div>
+      )}
 
       {guestPicker && (
         <div className="scanAlreadyOverlay" role="dialog" aria-modal="true">
