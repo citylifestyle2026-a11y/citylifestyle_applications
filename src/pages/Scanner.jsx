@@ -89,6 +89,8 @@ const Scanner = () => {
   const isMountedRef = useRef(true);
   const hasScannedRef = useRef(false);
   const resetTimeoutRef = useRef(null);
+  const startingRef = useRef(false);
+  const [cameraError, setCameraError] = useState(false);
 
   const resumeScanning = useCallback(() => {
     hasScannedRef.current = false;
@@ -281,43 +283,68 @@ const Scanner = () => {
     resumeScanning();
   };
 
-  useEffect(() => {
-    isMountedRef.current = true;
-    const html5QrCode = new Html5Qrcode(SCANNER_ELEMENT_ID);
-    scannerRef.current = html5QrCode;
+  // True only while the live camera video is really running.
+  const isCameraAlive = () => {
+    const video = document.querySelector(`#${SCANNER_ELEMENT_ID} video`);
+    if (!video) return false;
+    const track = video.srcObject?.getVideoTracks?.()[0];
+    return Boolean(track) && track.readyState === "live" && !video.paused && !video.ended;
+  };
 
-    html5QrCode
-      .start(
+  // Starts (or fully restarts) the camera. Safe to call any time.
+  const startCamera = useCallback(async () => {
+    if (!isMountedRef.current || startingRef.current) return;
+    startingRef.current = true;
+    try {
+      const old = scannerRef.current;
+      if (old) {
+        try { await old.stop(); } catch { /* not running */ }
+        try { old.clear(); } catch { /* ignore */ }
+      }
+      const html5QrCode = new Html5Qrcode(SCANNER_ELEMENT_ID);
+      scannerRef.current = html5QrCode;
+      await html5QrCode.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => {
-          handleDecodedText(decodedText);
-        },
-        () => {
-          // per-frame "not found yet" - expected constantly, ignore.
-        }
-      )
-      .catch(() => {
-        if (isMountedRef.current) {
-          setStatus("error");
-          setMessage("Camera not available. Check camera permission.");
-        }
-      });
+        (decodedText) => handleDecodedText(decodedText),
+        () => {}
+      );
+      if (isMountedRef.current) setCameraError(false);
+    } catch {
+      if (isMountedRef.current) setCameraError(true);
+    } finally {
+      startingRef.current = false;
+    }
+  }, [handleDecodedText]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    startCamera();
+
+    // Android WebView can silently stop the camera (screen off, app in
+    // background, idle for a while). Check regularly and restart it, so
+    // staff never need to logout/login to get the camera back.
+    const watchdog = setInterval(() => {
+      if (document.visibilityState === "visible" && !startingRef.current && !isCameraAlive()) {
+        startCamera();
+      }
+    }, 3000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !isCameraAlive()) startCamera();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
 
     return () => {
       isMountedRef.current = false;
+      clearInterval(watchdog);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
       clearTimeout(resetTimeoutRef.current);
       const instance = scannerRef.current;
-      // Calling stop() before start() has actually resolved (e.g. React
-      // StrictMode's mount->unmount->mount in dev) throws "Cannot stop,
-      // scanner is not running or paused." This is harmless (dev-only) -
-      // swallow it safely either way.
       if (instance) {
         try {
-          instance
-            .stop()
-            .then(() => instance.clear())
-            .catch(() => {});
+          instance.stop().then(() => instance.clear()).catch(() => {});
         } catch {
           // ignore - scanner was never running
         }
@@ -386,6 +413,14 @@ const Scanner = () => {
       >
         {message}
       </div>
+
+      {cameraError && (
+        <div className="editEntryBar">
+          <button type="button" className="editEntryBar__next" onClick={startCamera}>
+            Restart camera
+          </button>
+        </div>
+      )}
 
       {status === "success" && lastEntry && (
         <div className="editEntryBar">
