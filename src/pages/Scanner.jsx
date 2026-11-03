@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { checkInQrApi, undoCheckInQrApi } from "../services/qrService";
 import "./Scanner.css";
 import parvLogo from "../assets/parv-logo.png";
+import FaceScanner from "./FaceScanner";
 
 const SCANNER_ELEMENT_ID = "qr-reader-region";
 
@@ -67,6 +68,10 @@ const StatusIcon = ({ type }) => (
 
 const Scanner = () => {
   const { logout } = useAuth();
+
+  // "qr" = scan the ticket QR (original), "face" = recognise the guest's face
+  // from the photo they uploaded at registration.
+  const [mode, setMode] = useState("qr");
 
   // "scanning" (red) -> "checking" (blue) -> "success" (green) / "warning"
   // (amber) / "error" (red) -> back to "scanning". Green only after the
@@ -318,6 +323,10 @@ const Scanner = () => {
   }, [handleDecodedText]);
 
   useEffect(() => {
+    // The QR camera is only needed on the QR tab; the Face tab owns the camera
+    // while it is open (two screens can not use the camera at once).
+    if (mode !== "qr") return undefined;
+
     isMountedRef.current = true;
     startCamera();
 
@@ -351,7 +360,19 @@ const Scanner = () => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mode]);
+
+  const switchMode = (next) => {
+    if (next === mode) return;
+    clearTimeout(resetTimeoutRef.current);
+    hasScannedRef.current = false;
+    setPopup(null);
+    setGuestPicker(null);
+    setLastEntry(null);
+    setStatus("scanning");
+    setMessage("Point the camera at a QR code");
+    setMode(next);
+  };
 
   const closePopup = () => {
     setPopup(null);
@@ -381,6 +402,27 @@ const Scanner = () => {
         </button>
       </div>
 
+      <div className="scanTabs">
+        <button
+          type="button"
+          className={`scanTab${mode === "qr" ? " scanTab--active" : ""}`}
+          onClick={() => switchMode("qr")}
+        >
+          QR Scan
+        </button>
+        <button
+          type="button"
+          className={`scanTab${mode === "face" ? " scanTab--active" : ""}`}
+          onClick={() => switchMode("face")}
+        >
+          Face Scan
+        </button>
+      </div>
+
+      {mode === "face" ? (
+        <FaceScanner />
+      ) : (
+      <>
       <div className="scannerViewport">
         <div id={SCANNER_ELEMENT_ID} className="scannerVideoRegion" />
         <div className={frameClass}>
@@ -504,6 +546,8 @@ const Scanner = () => {
             </button>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );
