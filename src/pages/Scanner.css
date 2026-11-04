@@ -259,6 +259,18 @@
   background: #d92d20;
 }
 
+/* Green "Thank you" popup (face scan let the person in). */
+.scanAlreadyBox--success .scanAlreadyTitle {
+  font-size: 28px;
+  color: #067647;
+}
+
+.scanAlreadyBox--success .scanAlreadyText {
+  margin-bottom: 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
 /* ===== Big result icon (TICK / CROSS / "!") ===== */
 .statusIcon {
   width: 72px;
@@ -371,10 +383,13 @@
 .faceVideo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
 .faceVideo--mirror { transform: scaleX(-1); }
 .faceOval {
-  position: absolute; top: 46%; left: 50%; transform: translate(-50%, -50%);
-  width: min(62vw, 250px); height: min(80vw, 320px);
-  border: 4px solid transparent; border-radius: 50%;
-  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.35);
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  /* Sized from the camera box itself (not from the screen width) so the whole
+     oval always fits, on small and big phones, portrait and landscape. */
+  height: 80%; aspect-ratio: 3 / 4; max-width: 88%; max-height: 440px;
+  border: 4px solid rgba(255, 255, 255, 0.95); border-radius: 50%;
+  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.45);
   transition: border-color 0.2s ease, box-shadow 0.2s ease; pointer-events: none;
 }
 .faceOval--red { border-color: #f04438; }

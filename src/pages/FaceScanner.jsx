@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { faceMatchApi, faceCheckInApi } from "../services/qrService";
+import { speak } from "../services/speak";
 import "./Scanner.css";
 
 // Face Scan = second way to let a person in (next to the QR).
@@ -7,8 +8,9 @@ import "./Scanner.css";
 //      (the photo itself is never sent to the server).
 //   2. The server compares it with the fingerprints of the photos people
 //      uploaded when they registered, and answers with the best match.
-//   3. The staff see the registered photo next to the live face and press
-//      "Allow entry". Only then the ticket is checked in.
+//   3. A clear match is let in AUTOMATICALLY (no "Allow entry" button): the
+//      screen shows "Thank you" and the voice says "Thank you". A face that
+//      does not match shows "Not recognised" (and says it).
 
 const MODEL_URL = `${import.meta.env.BASE_URL}models`;
 
@@ -58,15 +60,6 @@ const playBeep = (frequency) => {
   }
 };
 
-// The live server shows uploaded images under /api/uploads (see backend app.js).
-const toImageUrl = (url) =>
-  url ? url.replace(/^(https?:\/\/[^/]+)\/uploads\//, "$1/api/uploads/") : "";
-
-const LEVEL_TEXT = {
-  high: "Strong match",
-  good: "Good match",
-  check: "Please compare carefully",
-};
 
 const FaceScanner = () => {
   const videoRef = useRef(null);
@@ -76,13 +69,11 @@ const FaceScanner = () => {
   const resetTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
 
-  const [status, setStatus] = useState("loading"); // loading | scanning | checking | confirm | success | warning | error
+  const [status, setStatus] = useState("loading"); // loading | scanning | checking | success | warning | error
   const [message, setMessage] = useState("Loading face scanner...");
   const [facing, setFacing] = useState("environment"); // back camera = staff point it at the guest
   const [cameraError, setCameraError] = useState("");
-  const [match, setMatch] = useState(null); // { ...server match, snapshot }
   const [popup, setPopup] = useState(null); // { tone, title, text }
-  const [confirming, setConfirming] = useState(false);
 
   const go = useCallback((next, text) => {
     statusRef.current = next;
@@ -93,9 +84,7 @@ const FaceScanner = () => {
   const resume = useCallback(() => {
     clearTimeout(resetTimeoutRef.current);
     if (!isMountedRef.current) return;
-    setMatch(null);
     setPopup(null);
-    setConfirming(false);
     go("scanning", "Show the guest's face to the camera");
   }, [go]);
 
@@ -180,6 +169,44 @@ const FaceScanner = () => {
   }, [go]);
 
   // ---------- one recognition round ----------
+  // ---------- matched face -> let the person in by itself ----------
+  const checkInMatched = useCallback(
+    async (data) => {
+      try {
+        const res = await faceCheckInApi(data.ticketId);
+        const d = res?.data || {};
+        const name = d.attendee?.name || data.attendee?.name || "";
+        playBeep(880);
+        speak("Thank you");
+        go(
+          "success",
+          `Thank you${name ? `, ${name}` : ""}!${
+            d.isGroupEntry && d.remaining > 0 ? ` ${d.remaining} more can enter on this pass.` : ""
+          }`
+        );
+        clearTimeout(resetTimeoutRef.current);
+        resetTimeoutRef.current = setTimeout(resume, RESET_DELAY_MS);
+      } catch (err) {
+        const serverMsg = err.response?.data?.message;
+        const text =
+          serverMsg ||
+          (err.response
+            ? "This ticket could not be checked in."
+            : "No connection to the server. Check internet and try again.");
+        const isAlreadyUsed = /already.*(used|checked)/i.test(String(serverMsg || ""));
+        playBeep(isAlreadyUsed ? 440 : 220);
+        speak(isAlreadyUsed ? "Already entered" : "Entry not allowed");
+        go(isAlreadyUsed ? "warning" : "error", text);
+        setPopup({
+          tone: isAlreadyUsed ? "warning" : "error",
+          title: isAlreadyUsed ? "Already Scanned" : err.response ? "Entry Not Allowed" : "No Connection",
+          text,
+        });
+      }
+    },
+    [go, resume]
+  );
+
   const recognise = useCallback(async () => {
     const faceapi = faceapiRef.current;
     const video = videoRef.current;
@@ -188,36 +215,47 @@ const FaceScanner = () => {
     go("checking", "Checking face...");
 
     try {
-      const full = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 }))
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+      // Read up to 3 frames and average them: glasses / masks / blinking make a
+      // single frame noisy, the average is much more stable.
+      const descriptors = [];
+      for (let i = 0; i < 3; i += 1) {
+        const f = await faceapi
+          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+        if (f) descriptors.push(f.descriptor);
+        if (i < 2) await new Promise((r) => setTimeout(r, 120));
+      }
 
-      if (!full) {
+      if (descriptors.length === 0) {
         go("scanning", "Face not clear. Hold still and look at the camera");
         return;
       }
 
-      // Small snapshot so the staff can compare it with the registered photo.
-      const canvas = document.createElement("canvas");
-      const scale = 360 / Math.max(video.videoWidth, 1);
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
-      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-      const snapshot = canvas.toDataURL("image/jpeg", 0.7);
+      const avg = new Array(128).fill(0);
+      descriptors.forEach((d) => d.forEach((v, idx) => { avg[idx] += v / descriptors.length; }));
+      const full = { descriptor: avg };
 
-      const res = await faceMatchApi(Array.from(full.descriptor));
+      const res = await faceMatchApi(full.descriptor);
       const data = res?.data || {};
 
-      if (!data.matched) {
+      // Only a clear match (strong / good) is let in. A weak "please compare
+      // carefully" match is treated as NOT recognised - there is no button
+      // for staff to confirm any more.
+      if (!data.matched || data.level === "check") {
         playBeep(220);
-        go("error", "Face not recognised");
+        speak(data.reason === "no_active_event" ? "No running event" : "Not recognised");
+        go("error", "Not recognised");
         setPopup({
           tone: "error",
-          title: "Face Not Recognised",
+          title: "Not Recognised",
           text:
             data.reason === "no_faces_enrolled"
-              ? "No registered photos found yet. Please scan the guest's QR instead."
+              ? `No registered photos found yet. Please scan the guest's QR instead.${
+                data.debug
+                  ? ` [events ${data.debug.activeEvents}, tickets ${data.debug.tickets}, photos ${data.debug.withPhoto}, face data ${data.debug.withFaceData}, no face found ${data.debug.photoButNoFaceFound}, engine ${data.debug.faceEngine}]`
+                  : ""
+              }`
               : data.reason === "no_active_event"
               ? "There is no running event right now."
               : "This face does not match any registered photo. Please scan the guest's QR instead.",
@@ -227,6 +265,7 @@ const FaceScanner = () => {
 
       if (data.alreadyEntered) {
         playBeep(440);
+        speak("Already entered");
         go("warning", `Already entered - ${data.attendee?.name || ""}`);
         setPopup({
           tone: "warning",
@@ -238,13 +277,12 @@ const FaceScanner = () => {
         return;
       }
 
-      // Found: staff compare the two faces and confirm.
-      playBeep(660);
-      setMatch({ ...data, snapshot });
-      go("confirm", "Check the photo, then allow entry");
+      // Clear match -> check in right away ("Thank you").
+      await checkInMatched(data);
     } catch (err) {
       const serverMsg = err.response?.data?.message;
       playBeep(220);
+      speak("Not recognised");
       go("error", serverMsg || "Could not check the face.");
       setPopup({
         tone: "error",
@@ -256,7 +294,7 @@ const FaceScanner = () => {
             : "No connection to the server. Check internet and try again."),
       });
     }
-  }, [go]);
+  }, [go, checkInMatched]);
 
   // ---------- detection loop (cheap face finder, runs while "scanning") ----------
   useEffect(() => {
@@ -285,7 +323,7 @@ const FaceScanner = () => {
       try {
         const det = await faceapi.detectSingleFace(
           video,
-          new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.6 })
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.4 })
         );
 
         if (det) {
@@ -325,62 +363,25 @@ const FaceScanner = () => {
     };
   }, [recognise]);
 
-  // ---------- staff actions ----------
-  const allowEntry = async () => {
-    if (!match || confirming) return;
-    setConfirming(true);
-    try {
-      const res = await faceCheckInApi(match.ticketId);
-      const d = res?.data || {};
-      const name = d.attendee?.name || match.attendee?.name || "";
-      playBeep(880);
-      setMatch(null);
-      go(
-        "success",
-        `Entry allowed${name ? ` - ${name}` : ""}${
-          d.isGroupEntry && d.remaining > 0 ? ` - ${d.remaining} more can enter on this pass` : ""
-        }`
-      );
-      clearTimeout(resetTimeoutRef.current);
-      resetTimeoutRef.current = setTimeout(resume, RESET_DELAY_MS);
-    } catch (err) {
-      const serverMsg = err.response?.data?.message;
-      const text =
-        serverMsg ||
-        (err.response
-          ? "This ticket could not be checked in."
-          : "No connection to the server. Check internet and try again.");
-      const isAlreadyUsed = /already.*(used|checked)/i.test(String(serverMsg || ""));
-      playBeep(isAlreadyUsed ? 440 : 220);
-      setMatch(null);
-      go(isAlreadyUsed ? "warning" : "error", text);
-      setPopup({
-        tone: isAlreadyUsed ? "warning" : "error",
-        title: isAlreadyUsed ? "Already Scanned" : err.response ? "Entry Not Allowed" : "No Connection",
-        text,
-      });
-    } finally {
-      setConfirming(false);
-    }
-  };
-
+  // Oval colour = what is happening: white = waiting for a face, blue =
+  // checking, green = let in, amber = already entered, red = not recognised.
   const ovalClass =
     status === "success"
       ? "faceOval faceOval--green"
       : status === "checking"
       ? "faceOval faceOval--blue faceOval--pulse"
-      : status === "warning" || status === "confirm"
+      : status === "warning"
       ? "faceOval faceOval--amber"
       : status === "error"
       ? "faceOval faceOval--red faceOval--pulse"
-      : "faceOval faceOval--red";
+      : "faceOval";
 
   const messageClass =
     status === "success"
       ? "scannerMessage scannerMessage--green"
       : status === "checking"
       ? "scannerMessage scannerMessage--blue"
-      : status === "warning" || status === "confirm"
+      : status === "warning"
       ? "scannerMessage scannerMessage--amber"
       : status === "error"
       ? "scannerMessage scannerMessage--red"
@@ -418,38 +419,11 @@ const FaceScanner = () => {
         </div>
       )}
 
-      {status === "confirm" && match && (
-        <div className="scanAlreadyOverlay" role="dialog" aria-modal="true">
-          <div className="scanAlreadyBox faceConfirm">
-            <h3 className="guestPick__title">Is this the same person?</h3>
-
-            <div className="faceCompare">
-              <figure>
-                {match.attendee?.profileImage ? (
-                  <img src={toImageUrl(match.attendee.profileImage)} alt="Registered" />
-                ) : (
-                  <div className="faceCompare__empty">No photo</div>
-                )}
-                <figcaption>Registered</figcaption>
-              </figure>
-              <figure>
-                <img src={match.snapshot} alt="Live camera" />
-                <figcaption>Camera now</figcaption>
-              </figure>
-            </div>
-
-            <p className="guestPick__name">{match.attendee?.name || match.booking?.name}</p>
-            <p className="guestPick__info">
-              {[match.ticketType?.ticketName, match.event?.title].filter(Boolean).join(" · ")}
-            </p>
-            <p className={`faceLevel faceLevel--${match.level}`}>{LEVEL_TEXT[match.level] || ""}</p>
-
-            <button type="button" className="guestPick__ok" onClick={allowEntry} disabled={confirming}>
-              {confirming ? "Please wait..." : "Allow entry"}
-            </button>
-            <button type="button" className="guestPick__cancel" onClick={resume} disabled={confirming}>
-              Not this person
-            </button>
+      {status === "success" && (
+        <div className="scanAlreadyOverlay" role="status" aria-live="polite">
+          <div className="scanAlreadyBox scanAlreadyBox--success">
+            <h3 className="scanAlreadyTitle">Thank you</h3>
+            <p className="scanAlreadyText">{message}</p>
           </div>
         </div>
       )}
