@@ -176,7 +176,6 @@ const FaceScanner = () => {
         const res = await faceCheckInApi(data.ticketId);
         const d = res?.data || {};
         const name = d.attendee?.name || data.attendee?.name || "";
-        playBeep(880);
         speak("Thank you");
         go(
           "success",
@@ -194,7 +193,6 @@ const FaceScanner = () => {
             ? "This ticket could not be checked in."
             : "No connection to the server. Check internet and try again.");
         const isAlreadyUsed = /already.*(used|checked)/i.test(String(serverMsg || ""));
-        playBeep(isAlreadyUsed ? 440 : 220);
         speak(isAlreadyUsed ? "Already entered" : "Entry not allowed");
         go(isAlreadyUsed ? "warning" : "error", text);
         setPopup({
@@ -243,7 +241,6 @@ const FaceScanner = () => {
       // carefully" match is treated as NOT recognised - there is no button
       // for staff to confirm any more.
       if (!data.matched || data.level === "check") {
-        playBeep(220);
         speak(data.reason === "no_active_event" ? "No running event" : "Not recognised");
         go("error", "Not recognised");
         setPopup({
@@ -264,7 +261,6 @@ const FaceScanner = () => {
       }
 
       if (data.alreadyEntered) {
-        playBeep(440);
         speak("Already entered");
         go("warning", `Already entered - ${data.attendee?.name || ""}`);
         setPopup({
@@ -281,7 +277,6 @@ const FaceScanner = () => {
       await checkInMatched(data);
     } catch (err) {
       const serverMsg = err.response?.data?.message;
-      playBeep(220);
       speak("Not recognised");
       go("error", serverMsg || "Could not check the face.");
       setPopup({
