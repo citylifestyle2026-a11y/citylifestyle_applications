@@ -1,11 +1,13 @@
 import { VOICE_DATA } from "./voiceData";
 
-// Plays a short recorded voice ("Thank you", "Not recognised" ...) so the staff
-// do not have to look at the screen. The clips are embedded in the app
-// (voiceData.js), so nothing extra has to be deployed, and they do not rely on
-// the browser's text-to-speech (silent on many phones / Android WebView).
+// Says a short phrase out loud ("Thank you", "Not recognised" ...) so the staff
+// do not have to look at the screen.
+//
+// The voice is the recorded ElevenLabs voice in voiceData.js (embedded in the
+// app, so nothing extra has to be deployed). Only if a clip is missing or the
+// device refuses to play it, the phone's / browser's own voice is used instead.
 // Never throws: the voice is only a bonus.
-const FILES = {
+const CLIPS = {
   "thank you": "thank-you",
   "not recognised": "not-recognised",
   "already entered": "already-entered",
@@ -13,19 +15,19 @@ const FILES = {
   "no running event": "no-event",
 };
 
-const clips = {};
+const clipCache = {};
 const getClip = (key) => {
-  if (!clips[key] && VOICE_DATA[key]) {
+  if (!clipCache[key] && VOICE_DATA[key]) {
     const audio = new Audio(VOICE_DATA[key]);
     audio.preload = "auto";
-    clips[key] = audio;
+    clipCache[key] = audio;
   }
-  return clips[key];
+  return clipCache[key];
 };
 
-// Browsers / WebViews only let a sound start after the person has touched the
-// page once. The first tap "unlocks" every clip silently, so the later
-// automatic "Thank you" (which is not a tap) is allowed to play.
+// A sound can only start after the person has touched the page once. The first
+// tap silently "unlocks" every clip, so the later automatic "Thank you" (which
+// is not a tap) is allowed to play.
 let unlocked = false;
 const unlock = () => {
   if (unlocked) return;
@@ -51,43 +53,46 @@ if (typeof window !== "undefined") {
   );
 }
 
+// ---------- fallback: the phone's / browser's own voice ----------
 const speakWithBrowserVoice = (text) => {
   try {
-    if (!("speechSynthesis" in window)) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    if (synth.speaking || synth.pending) synth.cancel();
     const u = new SpeechSynthesisUtterance(String(text));
     u.lang = "en-IN";
-    window.speechSynthesis.speak(u);
+    u.rate = 0.95;
+    synth.speak(u);
   } catch {
     // ignore
   }
 };
 
-let current = null;
+let currentClip = null;
 
 export const speak = (text) => {
   try {
-    const key = FILES[String(text).trim().toLowerCase()];
-    const audio = key ? getClip(key) : null;
+    const audio = getClip(CLIPS[String(text).trim().toLowerCase()]);
     if (!audio) {
       speakWithBrowserVoice(text);
       return;
     }
-    if (current && current !== audio) {
-      current.pause();
-      current.currentTime = 0;
+    if (currentClip && currentClip !== audio) {
+      currentClip.pause();
+      currentClip.currentTime = 0;
     }
-    current = audio;
+    currentClip = audio;
     audio.muted = false;
     audio.volume = 1;
     audio.currentTime = 0;
     const p = audio.play();
     if (p && typeof p.catch === "function") {
       p.catch((err) => {
-        console.warn("Voice could not play:", err?.message || err);
+        console.warn("Voice clip could not play:", err?.message || err);
         speakWithBrowserVoice(text); // second chance
       });
     }
   } catch {
-    // voice is only a bonus
+    speakWithBrowserVoice(text);
   }
 };
