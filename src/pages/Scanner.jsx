@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { useAuth } from "../context/AuthContext";
 import { checkInQrApi, undoCheckInQrApi } from "../services/qrService";
+import { speak } from "../services/speak";
 import "./Scanner.css";
 import parvLogo from "../assets/parv-logo.png";
 import FaceScanner from "./FaceScanner";
@@ -15,23 +16,53 @@ const RESET_DELAY_MS = 2200;
 // before the camera resumes automatically (staff can also tap "Next scan").
 const EDIT_WINDOW_MS = 7000;
 
-const playBeep = (frequency) => {
+// One shared AudioContext. Android WebView starts a brand-new context as
+// "suspended" when it is created without a tap (a scan result is not a tap), so
+// the old "new AudioContext() every time" beep was silent in the APK. We keep a
+// single context and resume it on the first touch and before every beep.
+let sharedAudioCtx = null;
+const getAudioCtx = () => {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = frequency;
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.25);
-    osc.onended = () => ctx.close();
+    if (!AudioContextClass) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === "closed") {
+      sharedAudioCtx = new AudioContextClass();
+    }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+};
+
+if (typeof window !== "undefined") {
+  const unlockAudio = () => {
+    const ctx = getAudioCtx();
+    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  };
+  ["pointerdown", "touchstart", "click", "keydown"].forEach((evt) =>
+    window.addEventListener(evt, unlockAudio, { passive: true })
+  );
+}
+
+const playBeep = (frequency) => {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const start = () => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    };
+    if (ctx.state === "suspended") ctx.resume().then(start).catch(() => {});
+    else start();
   } catch {
     // Non-critical, ignore.
   }
@@ -124,11 +155,67 @@ const Scanner = () => {
     setMessage(
       `Entry allowed${name ? ` - ${name}` : ""}${guestText}${leftText}`
     );
-    // Keep the result on screen a bit longer, with an "Edit count" button.
-    setLastEntry({ qrToken, guests });
+    // "Wrong count? Edit" only makes sense for a group pass where there were
+    // 2+ guests left to choose from. A normal 1-person QR (or the last guest of a
+    // pass) has nothing to edit, so it just resumes scanning like before.
+    const canEditCount = Boolean(data.isGroupEntry) && guests + remaining >= 2;
     clearTimeout(resetTimeoutRef.current);
-    resetTimeoutRef.current = setTimeout(resumeScanning, EDIT_WINDOW_MS);
+    if (canEditCount) {
+      setLastEntry({ qrToken, guests });
+      resetTimeoutRef.current = setTimeout(resumeScanning, EDIT_WINDOW_MS);
+    } else {
+      setLastEntry(null);
+      resetTimeoutRef.current = setTimeout(resumeScanning, RESET_DELAY_MS);
+    }
   }, [resumeScanning]);
+
+  // Red / amber result for a ticket that was NOT allowed in. Plays the beep AND
+  // says it out loud:  already used -> "Already entered",  wrong / unknown QR ->
+  // "Not recognised",  cancelled / other refusal -> "Entry not allowed".
+  const showEntryDenied = useCallback((err) => {
+    const serverMsg = err?.response?.data?.message;
+    const status = err?.response?.status;
+    const hasResponse = Boolean(err?.response);
+    const msg = String(serverMsg || "");
+
+    const isAlreadyUsed = /already.*(used|checked|scanned|entered)/i.test(msg);
+    const isCancelled = /cancel/i.test(msg);
+    const isWrongQr =
+      !isAlreadyUsed &&
+      !isCancelled &&
+      hasResponse &&
+      (status === 404 || status === 401 || /not found|invalid|expired/i.test(msg));
+
+    const text =
+      serverMsg ||
+      (hasResponse
+        ? "This ticket could not be checked in."
+        : "No connection to the server. Check internet and scan again.");
+
+    setStatus(isAlreadyUsed ? "warning" : "error");
+    setMessage(text);
+    playBeep(isAlreadyUsed ? 440 : 220);
+
+    if (isAlreadyUsed) speak("Already entered");
+    else if (isWrongQr) speak("Not recognised");
+    else if (hasResponse) speak("Entry not allowed");
+    else speak("No connection");
+
+    setPopup({
+      tone: isAlreadyUsed ? "warning" : "error",
+      title: isAlreadyUsed
+        ? "Already Scanned"
+        : isWrongQr
+        ? "Wrong QR"
+        : isCancelled
+        ? "Ticket Cancelled"
+        : hasResponse
+        ? "Entry Not Allowed"
+        : "No Connection",
+      text,
+    });
+    // Do NOT auto-resume: the popup's OK button resumes scanning.
+  }, []);
 
   const handleDecodedText = useCallback(
     async (decodedText) => {
@@ -166,44 +253,10 @@ const Scanner = () => {
 
         showEntryAllowed(data, qrToken);
       } catch (err) {
-        const serverMsg = err.response?.data?.message;
-        const isAlreadyUsed =
-          typeof serverMsg === "string" && /already.*(used|checked)/i.test(serverMsg);
-
-        // "Already checked in" is not really an error - it's expected
-        // when a ticket is scanned twice. Show it as amber/warning, not
-        // red, so staff can tell it apart from a genuinely invalid QR.
-        setStatus(isAlreadyUsed ? "warning" : "error");
-        setMessage(
-          serverMsg ||
-            (err.response
-              ? "This ticket could not be checked in."
-              : "No connection to the server. Check internet and scan again.")
-        );
-        playBeep(isAlreadyUsed ? 440 : 220);
-
-        const text =
-          serverMsg ||
-          (err.response
-            ? "This ticket could not be checked in."
-            : "No connection to the server. Check internet and scan again.");
-        const isCancelled = /cancel/i.test(String(serverMsg || ""));
-
-        setPopup({
-          tone: isAlreadyUsed ? "warning" : "error",
-          title: isAlreadyUsed
-            ? "Already Scanned"
-            : isCancelled
-            ? "Ticket Cancelled"
-            : err.response
-            ? "Entry Not Allowed"
-            : "No Connection",
-          text,
-        });
-        // Do NOT auto-resume: the popup's OK button resumes scanning.
+        showEntryDenied(err);
       }
     },
-    [resumeScanning, showEntryAllowed]
+    [showEntryAllowed, showEntryDenied]
   );
 
   // Staff confirmed the number of guests entering now.
@@ -218,21 +271,7 @@ const Scanner = () => {
       const res = await checkInQrApi(qrToken, pickedGuests);
       showEntryAllowed(res?.data || {}, qrToken);
     } catch (err) {
-      const serverMsg = err.response?.data?.message;
-      const text =
-        serverMsg ||
-        (err.response
-          ? "This ticket could not be checked in."
-          : "No connection to the server. Check internet and scan again.");
-      const isAlreadyUsed = /already.*(used|checked)/i.test(String(serverMsg || ""));
-      setStatus(isAlreadyUsed ? "warning" : "error");
-      setMessage(text);
-      playBeep(isAlreadyUsed ? 440 : 220);
-      setPopup({
-        tone: isAlreadyUsed ? "warning" : "error",
-        title: isAlreadyUsed ? "Already Scanned" : err.response ? "Entry Not Allowed" : "No Connection",
-        text,
-      });
+      showEntryDenied(err);
     }
   };
 
